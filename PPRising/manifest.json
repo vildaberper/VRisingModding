@@ -1,0 +1,7 @@
+{
+  "name": "PP Rising",
+  "description": "Does stuff",
+  "version_number": "0.0.1",
+  "website_url": "https://github.com/vildaberper/VRisingModding",
+  "dependencies": ["BepInEx-BepInExPack_V_Rising-1.0.0", "molenzwiebel-Wetstone-1.1.0"]
+}

@@ -29,17 +29,17 @@ namespace PPRising
 
     public static void Load(Plugin plugin)
     {
-      _enable = plugin.Config.Bind(new ConfigDefinition("PPRising", "QuickStackEnable"), true,
-        new ConfigDescription("Enable quick stack")
+      _enable = plugin.Config.Bind(new ConfigDefinition("QuickStack", "Enable"), true,
+        new ConfigDescription("[SERVER] Enable quick stack")
       );
-      _distance = plugin.Config.Bind(new ConfigDefinition("PPRising", "QuickStackDistance"), 20.0f,
-        new ConfigDescription("Quick stack distance", new AcceptableValueRange<float>(5f, 100f))
+      _distance = plugin.Config.Bind(new ConfigDefinition("QuickStack", "Distance"), 20.0f,
+        new ConfigDescription("[SERVER] Quick stack distance", new AcceptableValueRange<float>(5f, 100f))
       );
-      _nameIgnore = plugin.Config.Bind(new ConfigDefinition("PPRising", "QuickStackNameIgnore"), "nostack",
-        new ConfigDescription("Ignore quick stacking to containers with name containing")
+      _nameIgnore = plugin.Config.Bind(new ConfigDefinition("QuickStack", "NameIgnore"), "nostack",
+        new ConfigDescription("[SERVER] Ignore quick stacking to containers with name containing")
       );
-      _sortOnStack = plugin.Config.Bind(new ConfigDefinition("PPRising", "QuickStackSortOnStack"), true,
-        new ConfigDescription("Sort container after quick stacking to it")
+      _sortOnStack = plugin.Config.Bind(new ConfigDefinition("QuickStack", "SortOnStack"), true,
+        new ConfigDescription("[SERVER] Sort container after quick stacking to it")
       );
 
       _keybinding = KeybindManager.Register(new()
@@ -55,7 +55,7 @@ namespace PPRising
         if (!VWorld.IsServer) return;
         if (!_enable.Value) return;
 
-        Plugin.Logger.LogDebug($"QuickStackMessage recieved: {msg}");
+        Plugin.Logger.LogDebug("Recieved QuickStackRequestMessage");
 
         var character = fromCharacter.Character;
         var characterInventory = Util.GetInventoryEntity(character);
@@ -66,16 +66,25 @@ namespace PPRising
         }
 
         var gameManager = VWorld.Server.GetExistingSystem<ServerScriptMapper>()?._ServerGameManager;
-        var position = Util.GetLocalToWorld(character).Position;
+        var characterPosition = Util.GetLocalToWorld(character).Position;
         var quickStackDistanceSquared = Math.Pow(_distance.Value, 2);
-        var containersSet = new System.Collections.Generic.HashSet<(Entity, float)>();
+        var containersSet = new System.Collections.Generic.HashSet<(Entity, QuickStackedMessageContainer)>();
         foreach (var container in Util.GetContainerEntities())
         {
-          if (Util.GetNameableInteractable(container).Name.ToString().Contains(_nameIgnore.Value)) continue;
-          if (Util.DistanceSquared(position, Util.GetLocalToWorld(container).Position) > quickStackDistanceSquared) continue;
+          var name = Util.GetNameableInteractable(container).Name.ToString();
+          if (name.Contains(_nameIgnore.Value)) continue;
+
+          var position = Util.GetLocalToWorld(container).Position;
+          if (Util.DistanceSquared(characterPosition, position) > quickStackDistanceSquared) continue;
+
           if (!gameManager._TeamChecker.IsAllies(character, container)) continue;
 
-          containersSet.Add((container, Util.GetItemSlotFillRatio(container)));
+          containersSet.Add((container, new QuickStackedMessageContainer
+          {
+            name = name,
+            fillRatio = Util.GetItemSlotFillRatio(container),
+            position = position
+          }));
         }
 
         var containers = System.Linq.Enumerable.ToArray(containersSet);
@@ -83,19 +92,16 @@ namespace PPRising
 
         var gameDataSystem = Util.GetGameDataSystem();
         var movedTotal = 0;
-        var containerLocationsSet = new System.Collections.Generic.HashSet<float3>();
+        var messageContainersSet = new System.Collections.Generic.HashSet<QuickStackedMessageContainer>();
         for (int i = 0; i < containers.Length; ++i)
         {
-          if (Util.TrySmartMergeInventories(gameDataSystem.ItemHashLookupMap, characterInventory.Value, containers[i].Item1))
-          {
-            ++movedTotal;
-            containerLocationsSet.Add(Util.GetLocalToWorld(containers[i].Item1).Position);
-            if (_sortOnStack.Value)
-            {
-              Util.TrySortInventory(gameDataSystem.ItemHashLookupMap, containers[i].Item1);
-            }
-          }
-          Plugin.Logger.LogDebug($"Quick Stack merge to container {movedTotal}/{i}/{containers.Length} ({Util.ToPercent(containers[i].Item2)})");
+          if (!Util.TrySmartMergeInventories(gameDataSystem.ItemHashLookupMap, characterInventory.Value, containers[i].Item1)) continue;
+          if (_sortOnStack.Value) Util.TrySortInventory(gameDataSystem.ItemHashLookupMap, containers[i].Item1);
+          ++movedTotal;
+          var fillRatioBefore = Util.ToPercent(containers[i].Item2.fillRatio);
+          containers[i].Item2.fillRatio = Util.GetItemSlotFillRatio(containers[i].Item1);
+          messageContainersSet.Add(containers[i].Item2);
+          Plugin.Logger.LogDebug($"Quick Stack merge to container {i + 1}/{containers.Length} ({fillRatioBefore} -> {Util.ToPercent(containers[i].Item2.fillRatio)})");
         }
 
         if (_withDebuff == null)
@@ -116,14 +122,20 @@ namespace PPRising
         }
 
         var user = VWorld.Server.EntityManager.GetComponentData<ProjectM.Network.User>(fromCharacter.User);
-        VNetwork.SendToClient(user, new QuickStackedMessage { containers = System.Linq.Enumerable.ToArray(containerLocationsSet) });
 
-        Plugin.Logger.LogDebug($"Quick Stack done {movedTotal}/{containers.Length}");
+        Plugin.Logger.LogDebug("Sending QuickStackResultMessage");
+        VNetwork.SendToClient(user, new QuickStackResultMessage { containers = System.Linq.Enumerable.ToArray(messageContainersSet) });
       });
 
-      VNetworkRegistry.RegisterClientbound<QuickStackedMessage>(msg =>
+      VNetworkRegistry.RegisterClientbound<QuickStackResultMessage>(msg =>
       {
-        Plugin.Logger.LogDebug($"Quick Stack QuickStackedMessage recieved {msg.containers.Length}");
+        if (!VWorld.IsClient) return;
+
+        Plugin.Logger.LogDebug("Recieved QuickStackResultMessage");
+        foreach (var c in msg.containers)
+        {
+          Plugin.Logger.LogDebug($" - {c.name} ({Util.ToPercent(c.fillRatio)}) {c.position.x} {c.position.y} {c.position.z}");
+        }
       });
     }
 
@@ -131,7 +143,7 @@ namespace PPRising
     {
       KeybindManager.Unregister(_keybinding);
       VNetworkRegistry.UnregisterStruct<QuickStackRequestMessage>();
-      VNetworkRegistry.Unregister<QuickStackedMessage>();
+      VNetworkRegistry.Unregister<QuickStackResultMessage>();
     }
 
     [HarmonyPatch(typeof(GameplayInputSystem), nameof(GameplayInputSystem.HandleInput))]
@@ -141,25 +153,26 @@ namespace PPRising
       if (!VWorld.IsClient) return;
       if (!_keybinding.IsPressed) return;
 
-      VNetwork.SendToServerStruct<QuickStackRequestMessage>(new()
-      {
-      });
-
-      Plugin.Logger.LogDebug("QuickStackMessage sent");
+      Plugin.Logger.LogDebug("Sending QuickStackRequestMessage");
+      VNetwork.SendToServerStruct<QuickStackRequestMessage>(new() { });
     }
   }
 
-  public struct QuickStackRequestMessage
-  {
+  public struct QuickStackRequestMessage { }
 
+  public struct QuickStackedMessageContainer
+  {
+    public string name;
+    public float fillRatio;
+    public float3 position;
   }
 
-  public struct QuickStackedMessage : VNetworkMessage
+  public struct QuickStackResultMessage : VNetworkMessage
   {
-    public float3[] containers = Array.Empty<float3>();
+    public QuickStackedMessageContainer[] containers = Array.Empty<QuickStackedMessageContainer>();
 
-    public QuickStackedMessage() { }
-    public QuickStackedMessage(float3[] containers)
+    public QuickStackResultMessage() { }
+    public QuickStackResultMessage(QuickStackedMessageContainer[] containers)
     {
       this.containers = containers;
     }
@@ -169,15 +182,29 @@ namespace PPRising
       var parsed = reader.ReadString(Allocator.Temp);
       if (parsed.Equals("0")) return;
 
-      var containersSet = new System.Collections.Generic.HashSet<float3>();
-      foreach (var p in parsed.Split(";"))
+      var lines = parsed.Split("\n");
+      var containersSet = new System.Collections.Generic.HashSet<QuickStackedMessageContainer>();
+
+      for (int i = 0; i < lines.Length; i += 5)
       {
-        var f = p.Split(":");
-        containersSet.Add(new float3(
-          float.Parse(f[0]),
-          float.Parse(f[1]),
-          float.Parse(f[2])
-        ));
+        try
+        {
+          containersSet.Add(new QuickStackedMessageContainer
+          {
+            name = lines[i],
+            fillRatio = float.Parse(lines[i + 1]),
+            position = new float3(
+            float.Parse(lines[i + 2]),
+            float.Parse(lines[i + 3]),
+            float.Parse(lines[i + 4])
+          )
+          });
+        }
+        catch
+        {
+          Plugin.Logger.LogWarning("Failed to parse QuickStackResultMessage");
+          break;
+        }
       }
       containers = System.Linq.Enumerable.ToArray(containersSet);
     }
@@ -187,18 +214,18 @@ namespace PPRising
       StringBuilder sb = new StringBuilder();
       foreach (var container in containers)
       {
-        if (sb.Length > 0) sb.Append(";");
-        sb.Append($"{container.x}:{container.y}:{container.z}");
+        if (sb.Length > 0) sb.Append("\n");
+        sb.Append($"{container.name}\n{container.fillRatio}\n{container.position.x}\n{container.position.y}\n{container.position.z}");
       }
       writer.Write(sb.Length > 0 ? sb.ToString() : "0");
     }
   }
 
-  class QuickStackSorter : System.Collections.Generic.IComparer<(Entity, float)>
+  class QuickStackSorter : System.Collections.Generic.IComparer<(Entity, QuickStackedMessageContainer)>
   {
-    public int Compare((Entity, float) a, (Entity, float) b)
+    public int Compare((Entity, QuickStackedMessageContainer) a, (Entity, QuickStackedMessageContainer) b)
     {
-      return (int)Math.Round(b.Item2 * 100 - a.Item2 * 100);
+      return (int)Math.Round(b.Item2.fillRatio * 100 - a.Item2.fillRatio * 100);
     }
   }
 }

@@ -1,7 +1,7 @@
 {
   "name": "PPRising",
-  "description": "Does stuff",
-  "version_number": "0.0.1",
-  "website_url": "https://github.com/vildaberper/VRisingModding",
+  "description": "Makes your PP rise with a collection of QoL-features",
+  "version_number": "0.0.2",
+  "website_url": "https://github.com/vildaberper/VRisingModding/tree/main/PPRising",
   "dependencies": ["BepInEx-BepInExPack_V_Rising-1.0.0", "molenzwiebel-Wetstone-1.1.0"]
 }

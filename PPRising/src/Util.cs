@@ -124,12 +124,12 @@ namespace PPRising
     public static double Format(double value, int decimals = 1)
     {
       var p = Math.Pow(10, decimals);
-      return Math.Round(value * 100 * p) / p;
+      return Math.Round(value * p) / p;
     }
 
     public static string ToPercent(double value, int decimals = 1)
     {
-      return $"{Format(value, decimals)}%";
+      return $"{Format(value * 100, decimals)}%";
     }
 
     public static string ToSeconds(double value, int decimals = 1)

@@ -68,16 +68,18 @@ namespace PPRising
 
         if (_cooldown.Value > 0f)
         {
+          var now = DateTime.Now;
           DateTime lastQuickStack;
           if (_lastQuickStack.TryGetValue(user.Index, out lastQuickStack))
           {
-            var cooldown = _cooldown.Value - (DateTime.Now - lastQuickStack).TotalSeconds;
+            var cooldown = _cooldown.Value - (now - lastQuickStack).TotalSeconds;
             if (cooldown > 0d)
             {
               user.SendSystemMessage($"Quick stack is on cooldown ({Util.ToSeconds(cooldown)})");
               return;
             }
           }
+          _lastQuickStack[user.Index] = now;
         }
 
         var character = fromCharacter.Character;
